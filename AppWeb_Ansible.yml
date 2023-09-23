@@ -1,0 +1,121 @@
+---
+- name: Configuración para dezplegar pagina web y aplicación web con Ansible.	
+  hosts: all
+  become: yes
+  tasks:
+    - name: Actualizar paquetes
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Instalar paquetes necesarios para funcionamiento.
+      apt:
+        name: ['apache2', 'php', 'mysql-server', 'php-mysql','python3-pip']
+        state: present
+
+    - name: Instalar pymysql
+      pip:
+        name: pymysql
+        state: present
+
+    - name: Clonar repositorio de GitHub pagina web estatica.
+      git: 
+        repo: 'https://github.com/Batdarg/ScheduleTecNM.git'
+        dest: /var/www/html/pagina_web
+
+    - name: Clonar repositorio de GitHub aplicación web.
+      git: 
+        repo: 'https://github.com/Batdarg/AppWebPHP.git'
+        dest: /var/www/html/app_web
+
+    - name: Configurar dominios
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          192.168.1.11 www.agalvan.com
+          192.168.1.11 app.agalvan.com
+
+    - name: Crear archivo de configuracion para www.agalvan.com
+      copy:
+        content: |
+          <VirtualHost *:80>
+              ServerName www.agalvan.com
+              DocumentRoot /var/www/html/pagina_web
+
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+        dest: /etc/apache2/sites-available/www.agalvan.conf
+        force: no
+
+    - name: Crear archivo de configuracion para app.agalvan.com
+      copy:
+        content: |
+          <VirtualHost *:8080>
+              ServerName app.agalvan.com
+              DocumentRoot /var/www/html/app_web
+
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+        dest: /etc/apache2/sites-available/app.agalvan.conf
+        force: no
+
+    - name: Establecer contraseña de MySQL para el usuario administrador
+      mysql_user:
+        name: root
+        password: root
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        host: localhost
+      register: mysql_root_password_set
+      ignore_errors: yes
+
+    - name: Crear base de datos demo
+      mysql_db:
+        name: demo
+        login_user: root
+        login_password: root
+
+    - name: Cargar esquema de base de datos
+      mysql_db:
+        name: demo
+        state: import
+        target: /var/www/html/app_web/tabla.sql
+        login_user: root
+        login_password: root
+
+    - name: Eliminar cuentas anónimas
+      mysql_user:
+        name: "{{ item }}"
+        state: absent
+        login_user: root
+        login_password: root
+      with_items:
+        - ''
+        - 'mysql.sys'
+        - 'mysql.session'
+        - 'mysqlxsys'
+
+    - name: Eliminar la base de datos de prueba
+      mysql_db:
+        name: test
+        state: absent
+        login_user: root
+        login_password: root
+
+    - name: Configurar firewall para permitir tráfico HTTP (puerto 80)
+      ufw:
+        rule: allow
+        port: 80
+
+    - name: Deshabilitar sitio web predeterminado
+      command: a2dissite 000-default.conf
+
+    - name: Habilitar VirtualHost
+      command: a2ensite www.agalvan.conf app.agalvan.conf
+
+  handlers:
+    - name: Reiniciar Apache
+      service:
+        name: apache2
+        state: restarted
